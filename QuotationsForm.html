@@ -58,10 +58,12 @@
     .col-status { width: 105px; }
     .col-date { width: 110px; color: #666; }
     .col-ver { width: 55px; text-align: center; }
-    .col-acts { width: 140px; text-align: right; white-space: nowrap; }
+    .col-acts { width: 180px; text-align: right; white-space: nowrap; }
     .ver-badge { display: inline-block; background: #e8ecfd; color: #2f4bcc; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 20px; }
     .btn-open { background: none; border: 1px solid #4361ee; color: #4361ee; padding: 4px 10px; border-radius: 4px; font-size: 12px; font-weight: 600; cursor: pointer; }
     .btn-open:hover { background: #eef0fd; }
+    .btn-check { background: none; border: 1px solid #198754; color: #198754; width: 28px; height: 26px; padding: 0; border-radius: 4px; font-size: 14px; font-weight: 700; line-height: 1; cursor: pointer; margin-right: 4px; }
+    .btn-check:hover { background: #d1f2e1; }
     .btn-hist { background: none; border: none; color: #888; font-size: 11px; cursor: pointer; padding: 3px 8px; border-radius: 4px; margin-right: 4px; }
     .btn-hist:hover { background: #f0f2fa; color: #4361ee; }
     .hist-tbody { display: none; }
@@ -417,6 +419,7 @@ function renderList(quotations) {
         <td class="col-ver"><span class="ver-badge">v${q.version}</span></td>
         <td class="col-acts">
           ${hasHistory ? `<button class="btn-hist" onclick="event.stopPropagation();toggleHist('${histId}','${escHtml(q.id)}',this)">▶ History</button>` : ''}
+          ${canQuickConfirm(q) ? `<button class="btn-check" title="Confirm quotation" onclick="event.stopPropagation();quickConfirm(${i})">✓</button>` : ''}
           <button class="btn-open" onclick="event.stopPropagation();openQuotation(${i})">Open →</button>
         </td>
       </tr>`;
@@ -674,6 +677,17 @@ function confirmDelete() {
     .deleteQuotation(currentId);
 }
 function askConfirm() { document.getElementById('overlayConfirm').classList.add('open'); }
+
+/* Quick confirm from the list (✓ button) — reuses the same dialog and doConfirm() */
+function canQuickConfirm(q) {
+  const isAdmin = currentUser && currentUser.role === 'Admin';
+  return isAdmin && q.status !== 'Confirmed' && q.status !== 'Fulfilled';
+}
+function quickConfirm(index) {
+  currentId = allQuotations[index].id;
+  askConfirm();
+}
+
 function doConfirm() {
   const btn = document.getElementById('btnConfirmDo');
   closeDialog('overlayConfirm'); startProcessing(btn, 'Confirming quotation...');
@@ -792,13 +806,13 @@ function updateDeadline() {
 
 /* ══════════════════════════════
    VALIDATION
+   (No subtotal check on purpose — a total of 0 is allowed.)
 ══════════════════════════════ */
 function validateForm() {
   const min = parseInt(document.getElementById('minDays').value, 10); const max = parseInt(document.getElementById('maxDays').value, 10);
   if (!min || !max) { showToast('Please fill in Min and Max Days.', 'error'); return false; }
   if (!validateMax()) return false;
   if (!document.getElementById('projectName').value.trim()) { showToast('Please enter a Project Name.', 'error'); return false; }
-  if (!isItemized() && getSubtotalValue() <= 0) { showToast('Please enter a Subtotal amount.', 'error'); return false; }
   return true;
 }
 
