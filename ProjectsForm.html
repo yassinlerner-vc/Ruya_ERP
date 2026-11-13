@@ -48,6 +48,22 @@
     .badge-fully-paid { background: #d1f2e1; color: #0f5132; }
     .badge-distributed { background: #e8ecfd; color: #2f4bcc; }
     .badge-fulfilled { background: #d1f2e1; color: #0f5132; }
+    .badge-free { background: #e8ecfd; color: #2f4bcc; }
+    .badge-needs-review { background: #fff3cd; color: #856404; }
+    .badge-pending-delivery { background: #fff3cd; color: #856404; }
+    .badge-mode-pct { background: #e8ecfd; color: #2f4bcc; }
+    .badge-mode-fixed { background: #f0f2fa; color: #555; border: 1px solid #d0d3e0; padding: 2px 9px; }
+
+    .free-note { background: #eef0fd; border: 1px solid #c5cdf9; border-radius: 8px; padding: 12px 14px; font-size: 13px; color: #2f4bcc; margin-bottom: 14px; }
+
+    .delivery-box { border-radius: 8px; padding: 12px 14px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+    .delivery-box.pending { background: #fff8e6; border: 1px solid #ffe4a3; }
+    .delivery-box.confirmed { background: #f0f9f4; border: 1px solid #bfe5cc; }
+    .delivery-box.legacy { background: #f5f6fa; border: 1px solid #e2e4ef; }
+    .delivery-status { font-size: 13px; font-weight: 700; }
+    .delivery-status.pending { color: #856404; }
+    .delivery-status.confirmed { color: #0f5132; }
+    .delivery-sub { font-size: 12px; color: #888; margin-top: 2px; }
 
     .filter-tabs { display: flex; gap: 4px; margin-bottom: 16px; flex-wrap: wrap; }
     .filter-tab { padding: 5px 14px; border-radius: 20px; font-size: 12px; font-weight: 600; cursor: pointer; border: 1px solid #d0d3e0; background: #fff; color: #888; }
@@ -100,6 +116,8 @@
     .dist-table .col-amt { text-align: right; font-weight: 600; }
     .dist-table .col-pct { text-align: right; color: #888; font-size: 12px; }
     .dist-table .col-acts { text-align: right; }
+    .dist-table .col-basis { width: 110px; }
+    .dist-table tfoot td { font-weight: 700; border-top: 2px solid #e2e4ef; border-bottom: none; background: #fafbff; }
     .dist-progress { font-size: 12px; color: #666; margin: 8px 0 12px; }
     .dist-progress strong { color: #1a1a2e; }
     .dist-progress.match strong { color: #1e8a4a; }
@@ -108,6 +126,12 @@
     .inline-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
     .inline-row select { min-width: 180px; padding: 6px 9px; font-size: 13px; border: 1px solid #d0d3e0; border-radius: 5px; }
     .inline-row input { width: 120px; padding: 6px 9px; font-size: 13px; border: 1px solid #d0d3e0; border-radius: 5px; }
+
+    .mode-toggle { display: inline-flex; border: 1px solid #d0d3e0; border-radius: 5px; overflow: hidden; flex-shrink: 0; }
+    .mode-toggle button { padding: 6px 12px; font-size: 12px; font-weight: 700; border: none; background: #fff; color: #888; cursor: pointer; font-family: inherit; }
+    .mode-toggle button + button { border-left: 1px solid #d0d3e0; }
+    .mode-toggle button.active { background: #4361ee; color: #fff; }
+    .mode-toggle button:hover:not(.active) { background: #f0f2fa; color: #4361ee; }
 
     .locked-note { font-size: 12px; color: #888; padding: 10px 0; }
 
@@ -148,6 +172,7 @@
   </div>
   <div class="filter-tabs">
     <button class="filter-tab active" data-filter="all" onclick="setFilter('all')">All</button>
+    <button class="filter-tab" data-filter="Needs Review" onclick="setFilter('Needs Review')">🟣 Needs Review</button>
     <button class="filter-tab" data-filter="Unpaid" onclick="setFilter('Unpaid')">🔴 Unpaid</button>
     <button class="filter-tab" data-filter="Partially Paid" onclick="setFilter('Partially Paid')">🟡 Partially Paid</button>
     <button class="filter-tab" data-filter="Fully Paid" onclick="setFilter('Fully Paid')">🟢 Fully Paid</button>
@@ -176,19 +201,26 @@
 <div class="view" id="viewProject">
   <div class="section" id="projectSummary"></div>
 
+  <div id="freeNote"></div>
+
+  <div class="section">
+    <h3>Delivery</h3>
+    <div id="deliveryBody"></div>
+  </div>
+
   <div class="section">
     <h3>Scope of Work</h3>
     <div id="itemsRefTable"></div>
   </div>
 
-  <div class="section">
+  <div class="section" id="sectionPayments">
     <h3>Payments</h3>
     <div id="paidBanner"></div>
     <div id="paymentsTableWrap"></div>
     <button class="btn btn-primary" id="btnAddPayment" onclick="openAddPayment()">+ Record Payment</button>
   </div>
 
-  <div class="section">
+  <div class="section" id="sectionDistribution">
     <h3>Revenue Distribution</h3>
     <div id="distributionArea"></div>
   </div>
@@ -238,6 +270,24 @@
   </div>
 </div>
 
+<!-- ═══ DELIVERY CONFIRMATION DIALOG ═══ -->
+<div class="overlay" id="overlayDelivery">
+  <div class="dialog">
+    <h4 id="deliveryDialogTitle">Confirm Delivery</h4>
+    <div class="field">
+      <label>Delivery Date</label>
+      <input type="date" id="deliveryDateInput">
+      <div id="deliveryDateError" style="color:#c0392b;font-size:12px;margin-top:4px;"></div>
+    </div>
+    <div class="dialog-btns">
+      <button class="btn" onclick="closeDialog('overlayDelivery')">Cancel</button>
+      <button class="btn btn-success" id="btnDeliverySave" onclick="submitDelivery()">
+        <div class="spinner"></div><span class="btn-label">Confirm</span>
+      </button>
+    </div>
+  </div>
+</div>
+
 <script>
 /* ══════════════════════════════════════════════════════
    STATE
@@ -247,8 +297,14 @@ let activeFilter  = 'all';
 let currentDetail = null;
 let currentProjectId = null;
 let deletePaymentId  = null;
-let draftDistribution = [];
+let draftDistribution = [];   // rows: { personId, personName, mode: 'percent'|'amount', percent, amount }
 let distEditing = false;
+let distMode = 'percent';     // which mode the "Add" row is currently set to
+let distSelectedPerson = '';  // keeps the person dropdown stable across re-renders
+
+// Rounding slack (in piastres) when deciding whether a distribution "adds up".
+// Mirrors the server's tolerance, which absorbs it into the largest percent row.
+const DIST_TOL_CENTS = 5;
 
 /* ══════════════════════════════════════════════════════
    CALCULATOR-STYLE AMOUNT INPUTS
@@ -351,7 +407,9 @@ function setFilter(f) {
 function renderList(projects) {
   allProjects = projects || [];
   hideToast();
-  const filtered = activeFilter === 'all' ? allProjects : allProjects.filter(p => p.paymentStatus === activeFilter);
+  const filtered = activeFilter === 'all' ? allProjects
+    : activeFilter === 'Needs Review' ? allProjects.filter(p => p.status === 'Needs Review')
+    : allProjects.filter(p => p.paymentStatus === activeFilter);
   document.getElementById('listCount').textContent = filtered.length + ' project' + (filtered.length !== 1 ? 's' : '');
   const tbody = document.getElementById('listBody');
   if (!filtered.length) {
@@ -360,12 +418,16 @@ function renderList(projects) {
   }
   tbody.innerHTML = filtered.map(p => {
     const sk = statusKey(p.paymentStatus);
+    const statusBadgeHtml = p.status === 'Fulfilled' ? ' <span class="badge badge-fulfilled">✓ Fulfilled</span>'
+      : p.status === 'Needs Review' ? ' <span class="badge badge-needs-review">Needs Review</span>'
+      : (p.isDistributed ? ' <span class="badge badge-distributed">Distributed</span>' : '');
+    const deliveryBadgeHtml = (!p.deliveredDate && p.status !== 'Fulfilled') ? ' <span class="badge badge-pending-delivery">Delivery pending</span>' : '';
     return `<tr onclick="openProject('${esc(p.projectId)}')">
       <td class="col-id">${esc(p.quotationId)}</td>
       <td><strong>${esc(p.accountName)}</strong></td>
-      <td>${esc(p.projectName)}${p.status === 'Fulfilled' ? ' <span class="badge badge-fulfilled">✓ Fulfilled</span>' : (p.isDistributed ? ' <span class="badge badge-distributed">Distributed</span>' : '')}</td>
-      <td class="col-amt">${esc(p.currency)} ${fmt(p.totalAmount)}</td>
-      <td class="col-amt">${esc(p.currency)} ${fmt(p.amountPaid)}</td>
+      <td>${esc(p.projectName)}${statusBadgeHtml}${deliveryBadgeHtml}</td>
+      <td class="col-amt">${p.isFree ? 'Free' : esc(p.currency) + ' ' + fmt(p.totalAmount)}</td>
+      <td class="col-amt">${p.isFree ? '—' : esc(p.currency) + ' ' + fmt(p.amountPaid)}</td>
       <td class="col-status"><span class="badge badge-${sk}">${esc(p.paymentStatus)}</span></td>
       <td class="col-acts"><button class="btn-sm btn-sm-primary" onclick="event.stopPropagation();openProject('${esc(p.projectId)}')">Open →</button></td>
     </tr>`;
@@ -390,6 +452,8 @@ function openProject(projectId) {
       if (!detail) { showToast('Could not load project.', 'error'); return; }
       currentDetail = detail;
       distEditing = false;
+      distMode = 'percent';
+      distSelectedPerson = '';
       renderProjectDetail(detail);
       switchView('project');
       document.getElementById('topbarTitle').textContent = detail.project.quotationId + ' — ' + detail.project.projectName;
@@ -409,14 +473,98 @@ function renderProjectDetail(detail) {
       <div class="meta-cell"><div class="meta-label">Quotation</div><div class="meta-value">${esc(p.quotationId)}</div></div>
       <div class="meta-cell"><div class="meta-label">Due Date</div><div class="meta-value">${p.dueDate||'—'}</div></div>
       <div class="meta-cell"><div class="meta-label">Deadline</div><div class="meta-value">${p.deliveryDeadline||'—'}</div></div>
-      <div class="meta-cell"><div class="meta-label">Total Amount</div><div class="meta-value">${esc(p.currency)} ${fmt(p.totalAmount)}</div></div>
-      <div class="meta-cell"><div class="meta-label">Status</div><div class="meta-value">${p.status === 'Fulfilled' ? '<span class="badge badge-fulfilled">✓ Fulfilled</span>' : esc(p.status)}</div></div>
+      <div class="meta-cell"><div class="meta-label">Total Amount</div><div class="meta-value">${p.isFree ? 'Free' : esc(p.currency) + ' ' + fmt(p.totalAmount)}</div></div>
+      <div class="meta-cell"><div class="meta-label">Status</div><div class="meta-value">${statusBadge(p.status)}</div></div>
       ${p.projectDesc ? `<div class="meta-cell" style="grid-column:1/-1;"><div class="meta-label">Description</div><div class="meta-value" style="font-weight:400;color:#555;">${esc(p.projectDesc)}</div></div>` : ''}
     </div>`;
 
+  document.getElementById('freeNote').innerHTML = p.isFree
+    ? '<div class="free-note">This project is free, so no payment collection or revenue distribution applies.</div>'
+    : '';
+
+  renderDeliveryBlock(p);
   renderItemsRef(detail.items);
-  renderPayments(detail);
-  renderDistribution(detail);
+
+  document.getElementById('sectionPayments').classList.toggle('hidden', p.isFree);
+  document.getElementById('sectionDistribution').classList.toggle('hidden', p.isFree);
+  if (!p.isFree) {
+    renderPayments(detail);
+    renderDistribution(detail);
+  }
+}
+function statusBadge(status) {
+  if (status === 'Fulfilled')    return '<span class="badge badge-fulfilled">✓ Fulfilled</span>';
+  if (status === 'Needs Review') return '<span class="badge badge-needs-review">Needs Review</span>';
+  return esc(status);
+}
+
+/* ══════════════════════════════════════════════════════
+   DELIVERY
+   Applies to ALL projects. A free project's delivery
+   confirmation is also its fulfillment trigger (server-side);
+   a normal project's is one of three independent gates.
+══════════════════════════════════════════════════════ */
+function renderDeliveryBlock(p) {
+  const editLocked = p.isFree && p.status === 'Fulfilled';
+  let bodyHtml;
+  if (p.deliveredDate) {
+    bodyHtml = `
+      <div class="delivery-box confirmed">
+        <div class="delivery-status confirmed">Delivered on ${esc(p.deliveredDate)}</div>
+        ${editLocked ? '' : `<button class="btn-sm btn-sm-primary" onclick="openDeliveryDialog()">Edit date</button>`}
+      </div>`;
+  } else if (p.status === 'Fulfilled') {
+    // Legacy — already Fulfilled before delivery tracking existed.
+    bodyHtml = `
+      <div class="delivery-box legacy">
+        <div>
+          <div class="delivery-status" style="color:#888;">Not recorded</div>
+          <div class="delivery-sub">Delivered before delivery tracking was added.</div>
+        </div>
+      </div>`;
+  } else {
+    bodyHtml = `
+      <div class="delivery-box pending">
+        <div class="delivery-status pending">Delivery not confirmed</div>
+        <button class="btn-sm btn-sm-primary" onclick="openDeliveryDialog()">Confirm delivery</button>
+      </div>`;
+  }
+  document.getElementById('deliveryBody').innerHTML = bodyHtml;
+}
+function openDeliveryDialog() {
+  const p = currentDetail.project;
+  const input = document.getElementById('deliveryDateInput');
+  const todayStr = new Date().toISOString().split('T')[0];
+  input.value = p.deliveredDate || todayStr;
+  input.max = todayStr;
+  if (p.quotationDateIssued) { input.min = p.quotationDateIssued; } else { input.removeAttribute('min'); }
+  document.getElementById('deliveryDateError').textContent = '';
+  document.getElementById('deliveryDialogTitle').textContent = p.deliveredDate ? 'Edit Delivery Date' : 'Confirm Delivery';
+  document.getElementById('overlayDelivery').classList.add('open');
+}
+function submitDelivery() {
+  const p = currentDetail.project;
+  const dateStr = document.getElementById('deliveryDateInput').value;
+  const errEl = document.getElementById('deliveryDateError');
+  const todayStr = new Date().toISOString().split('T')[0];
+  errEl.textContent = '';
+  if (!dateStr) { errEl.textContent = 'A delivery date is required.'; return; }
+  if (dateStr > todayStr) { errEl.textContent = 'Delivery date cannot be in the future.'; return; }
+  if (p.quotationDateIssued && dateStr < p.quotationDateIssued) {
+    errEl.textContent = 'Cannot be before the quotation date (' + p.quotationDateIssued + ').'; return;
+  }
+  const btn = document.getElementById('btnDeliverySave');
+  startProcessing(btn, 'Saving...');
+  google.script.run
+    .withSuccessHandler(res => {
+      stopProcessing(btn);
+      if (!res.success) { showToast(res.error || 'Failed.', 'error'); return; }
+      closeDialog('overlayDelivery');
+      showToast('Delivery confirmed.', 'success');
+      openProject(currentProjectId);
+    })
+    .withFailureHandler(err => { stopProcessing(btn); showToast('Error: ' + err.message, 'error'); })
+    .confirmDelivery(currentProjectId, dateStr);
 }
 
 /* ══════════════════════════════════════════════════════
@@ -560,7 +708,34 @@ function confirmDeletePayment() {
 
 /* ══════════════════════════════════════════════════════
    REVENUE DISTRIBUTION
+   Each row is either a % share of the EGP actually collected
+   or a fixed EGP amount ("mixed mode"). Everything is computed
+   in whole piastres so mixed rows always reconcile to the pool.
 ══════════════════════════════════════════════════════ */
+function poolCentsOf(detail) { return Math.round((detail.totalEgpCollected || 0) * 100); }
+
+// EGP value of a row, in piastres
+function rowCents(r, poolCents) {
+  return r.mode === 'amount'
+    ? Math.round((Number(r.amount) || 0) * 100)
+    : Math.round(poolCents * (Number(r.percent) || 0) / 100);
+}
+// Percent a row represents (entered for % rows, derived for fixed rows)
+function rowPercent(r, poolCents) {
+  if (r.mode !== 'amount') return Number(r.percent) || 0;
+  return poolCents > 0 ? rowCents(r, poolCents) / poolCents * 100 : 0;
+}
+function fmtPct(n) { return (Math.round((Number(n) || 0) * 100) / 100) + '%'; }
+function basisBadge(mode) {
+  return mode === 'amount'
+    ? '<span class="badge badge-mode-fixed">Fixed</span>'
+    : '<span class="badge badge-mode-pct">% Share</span>';
+}
+function pctCell(r, poolCents) {
+  const pct = rowPercent(r, poolCents);
+  return (r.mode === 'amount' ? '≈ ' : '') + fmtPct(pct);
+}
+
 function renderDistribution(detail) {
   const area = document.getElementById('distributionArea');
   const p = detail.project;
@@ -572,17 +747,31 @@ function renderDistribution(detail) {
 
   if (detail.distribution.length && !distEditing) {
     const isForeign = p.currency !== 'EGP';
+    const poolCents = poolCentsOf(detail);
+    // Saved rows: amount is the stored EGP figure; percent is stored too.
+    const saved = detail.distribution.map(d => ({
+      personName: d.personName, mode: d.mode,
+      percent: d.percent, amount: d.amount
+    }));
+    const totalAmt = saved.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+    const totalPct = poolCents > 0 ? Math.round(totalAmt * 100) / poolCents * 100 : 0;
     area.innerHTML = `
       ${isForeign ? `<p class="locked-note" style="padding-top:0;margin-bottom:10px;">Distributed from EGP ${fmt(detail.totalEgpCollected)} actually collected (project total ${esc(p.currency)} ${fmt(p.totalAmount)}).</p>` : ''}
       <table class="dist-table">
-        <thead><tr><th>Person</th><th class="col-amt">Amount (EGP)</th><th class="col-pct">%</th></tr></thead>
+        <thead><tr><th>Person</th><th class="col-basis">Basis</th><th class="col-amt">Amount (EGP)</th><th class="col-pct">%</th></tr></thead>
         <tbody>
-          ${detail.distribution.map(d => `<tr>
+          ${saved.map(d => `<tr>
             <td><strong>${esc(d.personName)}</strong></td>
+            <td class="col-basis">${basisBadge(d.mode)}</td>
             <td class="col-amt">EGP ${fmt(d.amount)}</td>
-            <td class="col-pct">${d.percent.toFixed(1)}%</td>
+            <td class="col-pct">${d.mode === 'amount' ? '≈ ' : ''}${fmtPct(d.percent)}</td>
           </tr>`).join('')}
         </tbody>
+        <tfoot><tr>
+          <td colspan="2">Total</td>
+          <td class="col-amt">EGP ${fmt(totalAmt)}</td>
+          <td class="col-pct">${fmtPct(totalPct)}</td>
+        </tr></tfoot>
       </table>
       <button class="btn" onclick="enterDistEdit()">Edit Distribution</button>`;
     return;
@@ -597,9 +786,27 @@ function renderDistribution(detail) {
 }
 
 function enterDistEdit() {
-  draftDistribution = currentDetail.distribution.map(d => ({ personId: d.personId, personName: d.personName, percent: d.percent }));
+  draftDistribution = currentDetail.distribution.map(d => ({
+    personId:   d.personId,
+    personName: d.personName,
+    mode:       d.mode === 'amount' ? 'amount' : 'percent',
+    percent:    d.mode === 'amount' ? 0 : d.percent,
+    amount:     d.mode === 'amount' ? d.amount : 0
+  }));
   distEditing = true;
   renderDistEditor(currentDetail);
+}
+
+// Allocation summary for the current draft
+function draftTotals(detail) {
+  const poolCents = poolCentsOf(detail);
+  const allocated = draftDistribution.reduce((s, r) => s + rowCents(r, poolCents), 0);
+  const remaining = poolCents - allocated;           // + = left to allocate, − = over
+  return { poolCents, allocated, remaining };
+}
+function distMatches(detail) {
+  const t = draftTotals(detail);
+  return draftDistribution.length > 0 && t.poolCents > 0 && Math.abs(t.remaining) <= DIST_TOL_CENTS;
 }
 
 function renderDistEditor(detail) {
@@ -608,34 +815,51 @@ function renderDistEditor(detail) {
   const egpPool = detail.totalEgpCollected || 0;
   const isForeign = p.currency !== 'EGP';
   const members = detail.teamMembers || [];
-  const sum = draftDistribution.reduce((s, r) => s + r.percent, 0);
-  const diff = 100 - sum;
-  const matchClass = Math.abs(diff) < 0.5 ? 'match' : 'mismatch';
+  const t = draftTotals(detail);
+  const matchClass = distMatches(detail) ? 'match' : 'mismatch';
+  const allocPct = t.poolCents > 0 ? t.allocated / t.poolCents * 100 : 0;
+  const remPct   = t.poolCents > 0 ? Math.abs(t.remaining) / t.poolCents * 100 : 0;
 
   const rowsHtml = draftDistribution.map((r, idx) => `
     <tr>
       <td><strong>${esc(r.personName)}</strong></td>
-      <td class="col-amt">EGP ${fmt(egpPool * r.percent / 100)}</td>
-      <td class="col-pct">${r.percent.toFixed(1)}%</td>
+      <td class="col-basis">${basisBadge(r.mode)}</td>
+      <td class="col-amt">EGP ${fmt(rowCents(r, t.poolCents) / 100)}</td>
+      <td class="col-pct">${pctCell(r, t.poolCents)}</td>
       <td class="col-acts"><button class="btn-sm btn-sm-danger" onclick="removeDistRow(${idx})">Remove</button></td>
     </tr>`).join('');
+
+  let statusText;
+  if (Math.abs(t.remaining) <= DIST_TOL_CENTS && draftDistribution.length) {
+    statusText = ' ✓';
+  } else if (t.remaining > 0) {
+    statusText = ' — EGP ' + fmt(t.remaining / 100) + ' (' + fmtPct(remPct) + ') remaining';
+  } else {
+    statusText = ' — over by EGP ' + fmt(-t.remaining / 100) + ' (' + fmtPct(remPct) + ')';
+  }
+
+  const selId = distSelectedPerson || (members[0] ? members[0].id : '');
 
   area.innerHTML = `
     ${isForeign ? `<p class="locked-note" style="padding-top:0;margin-bottom:10px;">Distributing EGP ${fmt(egpPool)} actually collected (project total ${esc(p.currency)} ${fmt(p.totalAmount)}) — not a fresh conversion of the quotation total.</p>` : ''}
     <table class="dist-table">
-      <thead><tr><th>Person</th><th class="col-amt">Amount (EGP)</th><th class="col-pct">%</th><th class="col-acts"></th></tr></thead>
-      <tbody>${rowsHtml || '<tr><td colspan="4" style="text-align:center;color:#888;">No one added yet.</td></tr>'}</tbody>
+      <thead><tr><th>Person</th><th class="col-basis">Basis</th><th class="col-amt">Amount (EGP)</th><th class="col-pct">%</th><th class="col-acts"></th></tr></thead>
+      <tbody>${rowsHtml || '<tr><td colspan="5" style="text-align:center;color:#888;">No one added yet.</td></tr>'}</tbody>
     </table>
     <div class="dist-progress ${matchClass}">
-      Distributed: <strong>${sum.toFixed(1)}%</strong> (EGP ${fmt(egpPool * sum / 100)}) / 100% (EGP ${fmt(egpPool)})
-      ${Math.abs(diff) >= 0.5 ? ` — ${diff > 0 ? diff.toFixed(1) + '% remaining' : 'over by ' + (-diff).toFixed(1) + '%'}` : ' ✓'}
+      Allocated: <strong>EGP ${fmt(t.allocated / 100)}</strong> (${fmtPct(allocPct)}) of EGP ${fmt(egpPool)}${statusText}
     </div>
     <div class="inline-row">
-      <select id="distPersonSelect">${members.map(m => `<option value="${esc(m.id)}" data-name="${esc(m.name)}">${esc(m.name)}${m.role ? ' (' + esc(m.role) + ')' : ''}</option>`).join('')}</select>
-      <input type="text" id="distPercentInput" placeholder="%" inputmode="decimal">
+      <select id="distPersonSelect" onchange="distSelectedPerson = this.value">${members.map(m => `<option value="${esc(m.id)}" data-name="${esc(m.name)}"${m.id === selId ? ' selected' : ''}>${esc(m.name)}${m.role ? ' (' + esc(m.role) + ')' : ''}</option>`).join('')}</select>
+      <div class="mode-toggle">
+        <button type="button" id="distModePct" class="${distMode === 'percent' ? 'active' : ''}" onclick="setDistMode('percent')">%</button>
+        <button type="button" id="distModeAmt" class="${distMode === 'amount' ? 'active' : ''}" onclick="setDistMode('amount')">EGP</button>
+      </div>
+      <input type="text" id="distValueInput" placeholder="${distMode === 'amount' ? 'EGP amount' : '%'}" inputmode="decimal" autocomplete="off" onkeydown="if(event.key==='Enter'){event.preventDefault();addDistRow();}">
       <button class="btn-sm btn-sm-primary" onclick="addDistRow()">+ Add</button>
       <button class="btn-sm" onclick="distributeRest()">Distribute Rest to Selected</button>
     </div>
+    <p class="locked-note" style="padding-bottom:0;">Mix freely: percentages are of the EGP ${fmt(egpPool)} collected, fixed amounts are in EGP. The total must add up to the full amount.</p>
     <div class="dialog-btns" style="margin-top:16px;">
       <button class="btn" onclick="cancelDistEdit()">Cancel</button>
       <button class="btn btn-success" id="btnSaveDist" onclick="submitDistribution()">
@@ -644,28 +868,68 @@ function renderDistEditor(detail) {
     </div>`;
 }
 
+function setDistMode(mode) {
+  distMode = mode === 'amount' ? 'amount' : 'percent';
+  document.getElementById('distModePct').classList.toggle('active', distMode === 'percent');
+  document.getElementById('distModeAmt').classList.toggle('active', distMode === 'amount');
+  const input = document.getElementById('distValueInput');
+  input.placeholder = distMode === 'amount' ? 'EGP amount' : '%';
+  input.focus();
+}
+
+// Adds value to a person's row. One row per person: adding more to
+// someone already in the list tops up that row if the basis matches;
+// a different basis is refused rather than silently converting.
+function upsertDistRow(personId, personName, mode, value) {
+  const existing = draftDistribution.find(r => r.personId === personId);
+  if (existing) {
+    if (existing.mode !== mode) {
+      showToast(personName + ' is already added as ' + (existing.mode === 'amount' ? 'a fixed amount' : 'a % share') + ' — remove that row first to change the basis.', 'error');
+      return false;
+    }
+    if (mode === 'amount') existing.amount = Math.round((existing.amount + value) * 100) / 100;
+    else existing.percent = Math.round((existing.percent + value) * 10000) / 10000;
+    return true;
+  }
+  draftDistribution.push({
+    personId, personName, mode,
+    percent: mode === 'percent' ? value : 0,
+    amount:  mode === 'amount'  ? value : 0
+  });
+  return true;
+}
+
 function addDistRow() {
   const sel = document.getElementById('distPersonSelect');
-  const pctEl = document.getElementById('distPercentInput');
+  const valEl = document.getElementById('distValueInput');
   if (!sel.options.length) { showToast('No team members found. Add some in the Team module first.', 'error'); return; }
-  const percent = safe(pctEl.value);
-  if (!percent || percent <= 0) { showToast('Enter a valid percentage.', 'error'); return; }
+  const value = safe(valEl.value);
+  if (!value || value <= 0) {
+    showToast(distMode === 'amount' ? 'Enter a valid EGP amount.' : 'Enter a valid percentage.', 'error');
+    return;
+  }
+  if (distMode === 'percent' && value > 100) { showToast('A percentage cannot exceed 100%.', 'error'); return; }
   const personId = sel.value;
   const personName = sel.options[sel.selectedIndex].dataset.name;
-  const existing = draftDistribution.find(r => r.personId === personId);
-  if (existing) { existing.percent += percent; } else { draftDistribution.push({ personId, personName, percent }); }
+  distSelectedPerson = personId;
+  if (!upsertDistRow(personId, personName, distMode, value)) return;
   renderDistEditor(currentDetail);
 }
+
+// Gives whatever is still unallocated to the selected person, in the
+// currently selected basis (% share or fixed EGP amount).
 function distributeRest() {
   const sel = document.getElementById('distPersonSelect');
   if (!sel.options.length) { showToast('No team members found. Add some in the Team module first.', 'error'); return; }
-  const sum = draftDistribution.reduce((s, r) => s + r.percent, 0);
-  const remaining = Math.round((100 - sum) * 10) / 10;
-  if (remaining <= 0) { showToast('No remaining percentage to distribute.', 'error'); return; }
+  const t = draftTotals(currentDetail);
+  if (t.remaining <= DIST_TOL_CENTS) { showToast('Nothing left to distribute.', 'error'); return; }
   const personId = sel.value;
   const personName = sel.options[sel.selectedIndex].dataset.name;
-  const existing = draftDistribution.find(r => r.personId === personId);
-  if (existing) { existing.percent += remaining; } else { draftDistribution.push({ personId, personName, percent: remaining }); }
+  distSelectedPerson = personId;
+  const value = distMode === 'amount'
+    ? t.remaining / 100
+    : Math.round(t.remaining / t.poolCents * 100 * 10000) / 10000;
+  if (!upsertDistRow(personId, personName, distMode, value)) return;
   renderDistEditor(currentDetail);
 }
 function removeDistRow(idx) {
@@ -678,6 +942,20 @@ function cancelDistEdit() {
   renderDistribution(currentDetail);
 }
 function submitDistribution() {
+  if (!draftDistribution.length) { showToast('Add at least one person to distribute to.', 'error'); return; }
+  const t = draftTotals(currentDetail);
+  if (Math.abs(t.remaining) > DIST_TOL_CENTS) {
+    showToast(t.remaining > 0
+      ? 'EGP ' + fmt(t.remaining / 100) + ' is still unallocated.'
+      : 'Distribution is over by EGP ' + fmt(-t.remaining / 100) + '.', 'error');
+    return;
+  }
+  // Send only the field that was the input for each row; the server
+  // recomputes the EGP figures from the pool and reconciles rounding.
+  const payload = draftDistribution.map(r => r.mode === 'amount'
+    ? { personId: r.personId, personName: r.personName, mode: 'amount',  amount: r.amount }
+    : { personId: r.personId, personName: r.personName, mode: 'percent', percent: r.percent });
+
   const btn = document.getElementById('btnSaveDist');
   startProcessing(btn, 'Saving distribution...');
   google.script.run
@@ -689,7 +967,7 @@ function submitDistribution() {
       openProject(currentProjectId);
     })
     .withFailureHandler(err => { stopProcessing(btn); showToast('Error: ' + err.message, 'error'); })
-    .saveDistribution(currentProjectId, draftDistribution);
+    .saveDistribution(currentProjectId, payload);
 }
 
 /* ══════════════════════════════════════════════════════
