@@ -120,6 +120,16 @@
     .dialog p { font-size: 13px; color: #555; margin-bottom: 16px; line-height: 1.5; }
     .dialog-btns { display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; }
 
+    .success-dialog { text-align: center; max-width: 400px; }
+    .success-icon { width: 52px; height: 52px; border-radius: 50%; background: #d1f2e1; color: #1e8a4a; font-size: 28px; font-weight: 700; display: flex; align-items: center; justify-content: center; margin: 0 auto 14px; }
+    .success-dialog h4 { font-size: 17px; margin-bottom: 6px; }
+    .success-dialog p { margin-bottom: 14px; }
+    .success-summary { background: #f8f9ff; border: 1px solid #e2e4ef; border-radius: 8px; padding: 10px 14px; text-align: left; font-size: 13px; margin-bottom: 4px; }
+    .success-summary div { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; }
+    .success-summary span:first-child { color: #888; }
+    .success-summary span:last-child { font-weight: 600; text-align: right; }
+    .success-dialog .dialog-btns { justify-content: center; }
+
     .empty-state { text-align: center; padding: 40px; color: #888; font-size: 13px; }
   </style>
 </head>
@@ -264,6 +274,19 @@
   </div>
 </div>
 
+<!-- ═══ EXPENSE LOGGED SUCCESS DIALOG ═══ -->
+<div class="overlay" id="overlayLogged">
+  <div class="dialog success-dialog">
+    <div class="success-icon">✓</div>
+    <h4>Expense Logged Successfully</h4>
+    <p id="loggedSubtitle"></p>
+    <div class="success-summary" id="loggedSummary"></div>
+    <div class="dialog-btns">
+      <button class="btn btn-primary" onclick="closeLoggedDialog()">Back to Expenses</button>
+    </div>
+  </div>
+</div>
+
 <script>
 /* ══════════════════════════════════════════════════════
    STATE
@@ -278,6 +301,7 @@ let instDraftSplit = [];
 let instIsReview   = false;
 let instPeriodKey  = '';
 let deleteExpenseIdPending = null;
+let isSubmitting = false;
 
 const _amountCents = {};
 function initAmountInput(id) {
@@ -489,6 +513,8 @@ function openInstanceForm(catalogId, isReview) {
   const entry = allCatalog.find(c => c.id === catalogId);
   if (!entry) { showToast('Expense not found.', 'error'); return; }
   currentCatalog = entry;
+  isSubmitting = false;
+  document.getElementById('btnSaveInstance').disabled = false;
   instIsReview = !!isReview;
   instPeriodKey = entry.isRecurring ? entry.currentPeriod : '';
 
@@ -557,6 +583,8 @@ function removeInstSplitRow(idx) { instDraftSplit.splice(idx, 1); renderInstSpli
 function splitInstEvenly() { instDraftSplit = evenSplit(); renderInstSplitEditor(); }
 
 function submitInstance() {
+  if (isSubmitting) return;   // hard guard against double clicks
+
   const cur = document.getElementById('instCurrency').value;
   const isForeign = cur !== 'EGP';
   const egpEquivalent = isForeign ? getAmountValue('instEgpEquivalent') : '';
@@ -575,17 +603,53 @@ function submitInstance() {
     periodKey: instPeriodKey
   };
   if (!data.date) { showToast('Select a date.', 'error'); return; }
+
   const btn = document.getElementById('btnSaveInstance');
+  isSubmitting = true;
   startProcessing(btn, 'Saving...');
   google.script.run
     .withSuccessHandler(res => {
-      stopProcessing(btn);
-      if (!res.success) { showToast(res.error || 'Failed.', 'error'); return; }
-      showToast('Logged.', 'success');
-      setTimeout(showList, 1000);
+      if (!res.success) {
+        // Failed: allow the admin to fix and retry
+        isSubmitting = false;
+        stopProcessing(btn);
+        showToast(res.error || 'Failed.', 'error');
+        return;
+      }
+      // Success: keep the button DISABLED so it can't be clicked again
+      stopProcessing(null);
+      btn.classList.remove('loading');
+      hideToast();
+      showLoggedDialog(data);
     })
-    .withFailureHandler(err => { stopProcessing(btn); showToast('Error: ' + err.message, 'error'); })
+    .withFailureHandler(err => {
+      isSubmitting = false;
+      stopProcessing(btn);
+      showToast('Error: ' + err.message, 'error');
+    })
     .logExpenseInstance(data);
+}
+
+function showLoggedDialog(data) {
+  const isForeign = String(data.currency) !== 'EGP';
+  const rows = [
+    ['Expense', currentCatalog.name],
+    ['Amount', data.currency + ' ' + fmt(data.amount)]
+  ];
+  if (isForeign) rows.push(['EGP Equivalent', 'EGP ' + fmt(data.egpEquivalent)]);
+  rows.push(['Date', data.date]);
+  rows.push(['Paid By', data.paidByName]);
+  if (data.periodKey) rows.push(['Period', data.periodKey]);
+
+  document.getElementById('loggedSubtitle').textContent = 'This expense has been recorded. You don’t need to log it again.';
+  document.getElementById('loggedSummary').innerHTML = rows.map(r =>
+    `<div><span>${esc(r[0])}</span><span>${esc(r[1])}</span></div>`).join('');
+  document.getElementById('overlayLogged').classList.add('open');
+}
+
+function closeLoggedDialog() {
+  document.getElementById('overlayLogged').classList.remove('open');
+  showList();
 }
 
 function openHistory(catalogId) {
