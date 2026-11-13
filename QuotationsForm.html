@@ -194,9 +194,17 @@
       <div class="field"><label>Max Days</label><input type="number" id="maxDays" min="2" step="1" placeholder="e.g. 14"><div class="error" id="maxDaysError"></div></div>
       <div class="field"><label>Delivery Deadline</label><input type="date" id="deadline" readonly></div>
     </div>
+    <div class="checkbox-row" style="margin-top:4px;">
+      <input type="checkbox" id="showDelivery" checked>
+      <label for="showDelivery">Show delivery days / deadline on the PDF</label>
+    </div>
   </div>
   <div class="section">
     <h3>Items</h3>
+    <div class="checkbox-row" style="margin-bottom:12px;">
+      <input type="checkbox" id="isFree" onchange="onFreeToggle()">
+      <label for="isFree">Free (no charge — total and item prices are locked to 0)</label>
+    </div>
     <div class="row2" style="margin-bottom:12px;">
       <div class="field"><label>Pricing Mode</label><select id="pricingMode"><option value="Lump Sum">Lump Sum</option><option value="Itemized">Itemized</option></select></div>
       <div class="field"><label>Currency</label><select id="currency"></select></div>
@@ -286,6 +294,16 @@
     </div>
   </div>
 </div>
+<div class="overlay" id="overlayFreeConfirm">
+  <div class="dialog">
+    <h4>Mark as Free?</h4>
+    <p>Mark this quotation as Free? The total and all item prices will be set to 0 and locked. No payments or revenue distribution will apply.</p>
+    <div class="dialog-btns">
+      <button class="btn" onclick="cancelFree()">Cancel</button>
+      <button class="btn btn-success" onclick="confirmFreeTick()">Yes, Mark Free</button>
+    </div>
+  </div>
+</div>
 
 <script>
 /* ══════════════════════════════
@@ -295,6 +313,7 @@ let allQuotations = [];
 let currentIndex  = -1;
 let currentMode   = 'list';
 let currentId     = null;
+let currentQuotationStatus = null;
 let itemsList     = [];
 let rowCount      = 0;
 let subtotalCents = 0;
@@ -414,7 +433,7 @@ function renderList(quotations) {
         <td>${escHtml(q.accountName)}</td>
         <td>${escHtml(q.projectName || '—')}</td>
         <td class="col-date">${q.dateIssued || '—'}</td>
-        <td class="col-total">${escHtml(q.currency)} ${fmtNum(q.total)}</td>
+        <td class="col-total">${q.isFree ? 'Free' : escHtml(q.currency) + ' ' + fmtNum(q.total)}</td>
         <td class="col-status"><span class="badge badge-${(q.status||'drafted').toLowerCase()}">${escHtml(q.status)}</span></td>
         <td class="col-ver"><span class="ver-badge">v${q.version}</span></td>
         <td class="col-acts">
@@ -574,6 +593,7 @@ function setReadOnly(on) { document.body.classList.toggle('readonly-mode', on); 
    POPULATE FORM
 ══════════════════════════════ */
 function populateForm(q) {
+  currentQuotationStatus = q.status || 'Drafted';
   setValue('pricingMode', q.pricingMode); setValue('account', q.accountId);
   setValue('dateIssued', q.dateIssued); setValue('projectName', q.projectName);
   setValue('projectDescription', q.projectDescription); setValue('minDays', q.minDays);
@@ -583,6 +603,8 @@ function populateForm(q) {
   document.getElementById('applyTax').checked      = !!q.taxed;
   document.getElementById('includeBankDetails').checked     = !!q.includeBankDetails;
   document.getElementById('includeInstapayDetails').checked = !!q.includeInstapayDetails;
+  document.getElementById('showDelivery').checked = q.showDelivery !== false;
+  document.getElementById('isFree').checked = !!q.isFree;
   document.getElementById('discountInputs').style.visibility = q.discounted ? 'visible' : 'hidden';
   document.getElementById('taxInputs').style.visibility      = q.taxed      ? 'visible' : 'hidden';
   setValue('discountPercent', q.discountPercent || ''); setValue('taxPercent', q.taxPercent || '');
@@ -593,6 +615,8 @@ function populateForm(q) {
   (q.items || []).forEach(item => addRow(item));
   setSubtotalDisplay(q.subtotal || 0);
   applyPricingModeUI();
+  if (q.isFree) { lockFreeFields(); } else { clearFreeLockStyling(); }
+  updateFreeCheckboxLock();
 }
 function setValue(id, val) {
   const el = document.getElementById(id); if (!el) return;
@@ -609,11 +633,16 @@ function resetForm() {
   document.getElementById('applyDiscount').checked = false; document.getElementById('applyTax').checked = false;
   document.getElementById('includeBankDetails').checked = false;
   document.getElementById('includeInstapayDetails').checked = false;
+  document.getElementById('showDelivery').checked = true;
+  document.getElementById('isFree').checked = false;
+  currentQuotationStatus = null;
   document.getElementById('discountInputs').style.visibility = 'hidden'; document.getElementById('taxInputs').style.visibility = 'hidden';
   ['discountPercent','taxPercent','discountAmount','taxAmount','total'].forEach(id => { document.getElementById(id).value = ''; });
   subtotalCents = 0; document.getElementById('subtotal').value = '';
   document.getElementById('itemsBody').innerHTML = ''; rowCount = 0;
   applyPricingModeUI();
+  clearFreeLockStyling();
+  updateFreeCheckboxLock();
 }
 
 /* ══════════════════════════════
@@ -660,6 +689,8 @@ function collectFormData() {
     taxed: document.getElementById('applyTax').checked, taxPercent: safe(document.getElementById('taxPercent').value),
     includeBankDetails: document.getElementById('includeBankDetails').checked,
     includeInstapayDetails: document.getElementById('includeInstapayDetails').checked,
+    showDelivery: document.getElementById('showDelivery').checked,
+    isFree: document.getElementById('isFree').checked,
     notes: document.getElementById('notes').value, items
   };
 }
@@ -726,6 +757,11 @@ function addRow(prefill) {
   tr.querySelector('.btn-del').addEventListener('click', () => { tr.remove(); reNumberRows(); calc(); });
   document.getElementById('itemsBody').appendChild(tr);
   reNumberRows(); applyPricingModeUI();
+  if (isFreeChecked()) {
+    const priceInp = tr.querySelector('.item-price');
+    priceInp.value = '0'; priceInp.disabled = true;
+    priceInp.style.background = '#f0f2fa'; priceInp.style.color = '#666';
+  }
 }
 function reNumberRows() { document.querySelectorAll('#itemsBody tr').forEach((row, i) => { row.querySelector('.row-num').textContent = i + 1; }); }
 
@@ -740,18 +776,89 @@ function applyPricingModeUI() {
 }
 function onPricingModeChange() {
   applyPricingModeUI();
+  if (isFreeChecked()) { lockFreeFields(); return; }
   if (isItemized()) { document.querySelectorAll('#itemsBody tr').forEach(row => { const sel = row.querySelector('.item-sel'); const price = row.querySelector('.item-price'); const it = itemsList.find(x => x.name === sel.value); if (it && price.value === '') price.value = it.price || 0; }); }
   else { subtotalCents = 0; document.getElementById('subtotal').value = ''; }
   calc();
 }
 
 /* ══════════════════════════════
+   FREE QUOTATIONS
+   Ticking requires confirmation (see overlayFreeConfirm); unticking
+   is instant. While ticked, total + all item prices are forced to
+   0 and locked — enforced again server-side regardless of payload.
+══════════════════════════════ */
+function isFreeChecked() { return document.getElementById('isFree').checked; }
+
+function onFreeToggle() {
+  const cb = document.getElementById('isFree');
+  if (cb.checked) {
+    cb.checked = false; // hold off until the user confirms
+    document.getElementById('overlayFreeConfirm').classList.add('open');
+  } else {
+    unlockFreeFieldsAndClear();
+  }
+}
+function cancelFree() {
+  closeDialog('overlayFreeConfirm');
+  document.getElementById('isFree').checked = false;
+}
+function confirmFreeTick() {
+  closeDialog('overlayFreeConfirm');
+  document.getElementById('isFree').checked = true;
+  lockFreeFields();
+}
+
+function lockFreeFields() {
+  const subtotalEl = document.getElementById('subtotal');
+  subtotalEl.disabled = true;
+  subtotalEl.style.background = '#f0f2fa'; subtotalEl.style.color = '#666';
+  document.querySelectorAll('#itemsBody .item-price').forEach(inp => {
+    inp.value = '0'; inp.disabled = true;
+    inp.style.background = '#f0f2fa'; inp.style.color = '#666';
+  });
+  calc();
+}
+/* User unticked — clear to empty (do NOT restore old values) and re-enable. */
+function unlockFreeFieldsAndClear() {
+  const subtotalEl = document.getElementById('subtotal');
+  const itemized = isItemized();
+  subtotalEl.disabled = itemized; // itemized subtotal stays computed/locked regardless of Free
+  subtotalEl.style.background = itemized ? '#f0f2fa' : '';
+  subtotalEl.style.color = itemized ? '#666' : '';
+  if (!itemized) { subtotalCents = 0; subtotalEl.value = ''; }
+  document.querySelectorAll('#itemsBody .item-price').forEach(inp => {
+    inp.value = ''; inp.disabled = false;
+    inp.style.background = ''; inp.style.color = '';
+  });
+  document.querySelectorAll('#itemsBody .item-subtotal').forEach(inp => { inp.value = ''; });
+  calc();
+}
+/* Loading a non-free quotation — drop any leftover Free lock styling
+   WITHOUT touching values (unlike the user-untick path above). */
+function clearFreeLockStyling() {
+  const subtotalEl = document.getElementById('subtotal');
+  const itemized = isItemized();
+  subtotalEl.disabled = itemized;
+  subtotalEl.style.background = itemized ? '#f0f2fa' : '';
+  subtotalEl.style.color = itemized ? '#666' : '';
+  document.querySelectorAll('#itemsBody .item-price').forEach(inp => {
+    inp.disabled = false; inp.style.background = ''; inp.style.color = '';
+  });
+}
+/* Free checkbox itself is only changeable while still a Draft. */
+function updateFreeCheckboxLock() {
+  document.getElementById('isFree').disabled = !!(currentQuotationStatus && currentQuotationStatus !== 'Drafted');
+}
+
+/* ══════════════════════════════
    CALC
 ══════════════════════════════ */
 function calc() {
+  const free = isFreeChecked();
   let subtotal = 0;
-  if (isItemized()) { document.querySelectorAll('#itemsBody tr').forEach(row => { const qty = safe(row.querySelector('.item-qty').value); const price = safe(row.querySelector('.item-price').value); const rowSub = qty * price; setFmt(row.querySelector('.item-subtotal'), rowSub); subtotal += rowSub; }); setFmt(document.getElementById('subtotal'), subtotal); }
-  else { subtotal = getSubtotalValue(); }
+  if (isItemized()) { document.querySelectorAll('#itemsBody tr').forEach(row => { const qty = safe(row.querySelector('.item-qty').value); const price = free ? 0 : safe(row.querySelector('.item-price').value); const rowSub = free ? 0 : qty * price; setFmt(row.querySelector('.item-subtotal'), rowSub); subtotal += rowSub; }); setFmt(document.getElementById('subtotal'), subtotal); }
+  else { subtotal = free ? 0 : getSubtotalValue(); if (free) setFmt(document.getElementById('subtotal'), 0); }
   let discountAmt = 0;
   if (document.getElementById('applyDiscount').checked) { const pct = Math.min(safe(document.getElementById('discountPercent').value), 100); discountAmt = subtotal * pct / 100; setFmt(document.getElementById('discountAmount'), discountAmt); }
   const afterDiscount = subtotal - discountAmt;
@@ -806,13 +913,17 @@ function updateDeadline() {
 
 /* ══════════════════════════════
    VALIDATION
-   (No subtotal check on purpose — a total of 0 is allowed.)
+   Restores the pre-"allow 0" rule: a non-free Lump Sum quotation
+   needs a positive amount (Itemized was never checked here even
+   before that edit). Free quotations are always exempt — their
+   amount is intentionally 0.
 ══════════════════════════════ */
 function validateForm() {
   const min = parseInt(document.getElementById('minDays').value, 10); const max = parseInt(document.getElementById('maxDays').value, 10);
   if (!min || !max) { showToast('Please fill in Min and Max Days.', 'error'); return false; }
   if (!validateMax()) return false;
   if (!document.getElementById('projectName').value.trim()) { showToast('Please enter a Project Name.', 'error'); return false; }
+  if (!isFreeChecked() && !isItemized() && getSubtotalValue() <= 0) { showToast('Please enter a Subtotal amount.', 'error'); return false; }
   return true;
 }
 
