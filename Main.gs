@@ -54,7 +54,8 @@ const DIST = {
   CURRENCY:        9,
   NOTES:           10,
   CREATED_BY:      11,
-  CREATED_AT:      12
+  CREATED_AT:      12,
+  MODE:            13
 };
 
 // ============================================================
@@ -124,6 +125,12 @@ const A = {
 //  idea but for the Instapay sub-section. Independent toggle so
 //  a quotation can show either, both, or neither. Added at the
 //  very end so no existing index shifts.
+//  Col 29 (AD) added: IsFree — checkbox. Marks a quotation as a
+//  free job: total and all item prices are forced to 0 (server-
+//  enforced regardless of client payload) and no payments/
+//  revenue distribution ever apply to the resulting project.
+//  Blank/false = not free (legacy rows). Added at the very end
+//  so no existing index shifts.
 // ============================================================
 const Q = {
   QUOTATION_ID:            0,
@@ -154,7 +161,9 @@ const Q = {
   LAST_UPDATED_BY:         25,
   LAST_UPDATED_AT:         26,
   INCLUDE_BANK_DETAILS:    27,
-  INCLUDE_INSTAPAY_DETAILS: 28
+  INCLUDE_INSTAPAY_DETAILS: 28,
+  IS_FREE:                 29,
+  SHOW_DELIVERY: 30,   // 0-based index → column AE
 };
 
 // ============================================================
@@ -194,7 +203,14 @@ const QI = {
 //  Project Name | Project Description | Delivery Deadline |
 //  Due Date | Status | Internal Notes | Created At |
 //  Completed At | Total Amount | Currency |
-//  Total Commission | Remaining Amount
+//  Total Commission | Remaining Amount | Delivered Date
+//
+//  Col 16 (Q) added: DeliveredDate — date, blank = not recorded.
+//  Set when an admin confirms delivery (see confirmDelivery() in
+//  Projects.gs); used for both free and normal projects. Legacy
+//  rows (already Fulfilled before this feature) stay blank and
+//  display as "Not recorded". Added at the very end so no
+//  existing index shifts.
 // ============================================================
 const P = {
   PROJECT_ID:        0,
@@ -212,7 +228,8 @@ const P = {
   TOTAL_AMOUNT:      12,
   CURRENCY:          13,
   TOTAL_COMMISSION:  14,
-  REMAINING_AMOUNT:  15
+  REMAINING_AMOUNT:  15,
+  DELIVERED_DATE:    16
 };
 
 // ============================================================
