@@ -6,6 +6,10 @@ function logQuotationFieldChanges(oldRow, newData, accountId, accountName) {
   const qId   = String(oldRow[Q.QUOTATION_ID]);
   const label = qId + ' — ' + (newData.projectName || oldRow[Q.PROJECT_NAME]);
 
+  // Blank/missing ShowDelivery on old rows means "show" (true)
+  const oldShowDelivery = (oldRow[Q.SHOW_DELIVERY] === '' || oldRow[Q.SHOW_DELIVERY] === undefined)
+    ? true : !!oldRow[Q.SHOW_DELIVERY];
+
   const fields = [
     { key: 'ProjectName',        old: oldRow[Q.PROJECT_NAME],     nw: newData.projectName },
     { key: 'ProjectDescription', old: oldRow[Q.PROJECT_DESC],     nw: newData.projectDescription },
@@ -29,7 +33,9 @@ function logQuotationFieldChanges(oldRow, newData, accountId, accountName) {
     { key: 'Total',              old: oldRow[Q.TOTAL],            nw: newData.total },
     { key: 'Notes',              old: oldRow[Q.NOTES],            nw: newData.notes },
     { key: 'IncludeBankDetails', old: oldRow[Q.INCLUDE_BANK_DETAILS], nw: newData.includeBankDetails },
-    { key: 'IncludeInstapayDetails', old: oldRow[Q.INCLUDE_INSTAPAY_DETAILS], nw: newData.includeInstapayDetails }
+    { key: 'IncludeInstapayDetails', old: oldRow[Q.INCLUDE_INSTAPAY_DETAILS], nw: newData.includeInstapayDetails },
+    { key: 'IsFree',             old: !!oldRow[Q.IS_FREE],         nw: newData.isFree },
+    { key: 'ShowDelivery',       old: oldShowDelivery,             nw: newData.showDelivery }
   ];
 
   fields.forEach(f => {
@@ -145,7 +151,8 @@ function getQuotations() {
         ? Utilities.formatDate(new Date(row[Q.DATE_ISSUED]), tz, 'yyyy-MM-dd') : '',
       total:       row[Q.TOTAL],
       currency:    row[Q.CURRENCY],
-      status:      row[Q.STATUS]
+      status:      row[Q.STATUS],
+      isFree:      !!row[Q.IS_FREE]
     }))
     .sort((a, b) => a.id.localeCompare(b.id));
 }
@@ -210,6 +217,10 @@ function getQuotationById(quotationId) {
     notes:                  qRow[Q.NOTES],
     includeBankDetails:     !!qRow[Q.INCLUDE_BANK_DETAILS],
     includeInstapayDetails: !!qRow[Q.INCLUDE_INSTAPAY_DETAILS],
+    isFree:                 !!qRow[Q.IS_FREE],
+    // Blank (old quotations) = show delivery on the PDF
+    showDelivery:           (qRow[Q.SHOW_DELIVERY] === '' || qRow[Q.SHOW_DELIVERY] === undefined)
+      ? true : !!qRow[Q.SHOW_DELIVERY],
     pdfUrl:                 extractUrl(qRow[Q.FOLDER_URL]) || '', // the live quotation PDF
     items
   };
@@ -304,20 +315,37 @@ function createQuotation(data) {
     return { success: false, error: 'Account not found. Please check the account record.' };
   }
 
+  // ── Free flag ──────────────────────────────────────────────
+  const isFree = !!data.isFree;
+
+  // ── Show delivery on PDF (default true if flag missing) ───
+  const showDelivery = data.showDelivery !== false;
+
   // ── Calculations ──────────────────────────────────────────
   let subtotal = data.subtotal;
   if (data.pricingMode === 'Itemized') {
     subtotal = data.items.reduce((sum, item) => sum + (item.subtotal || 0), 0);
   }
-  const discountAmount     = data.discounted ? subtotal * (data.discountPercent / 100) : 0;
-  const discountedSubtotal = subtotal - discountAmount;
-  const taxAmount          = data.taxed ? discountedSubtotal * (data.taxPercent / 100) : 0;
-  const total              = discountedSubtotal + taxAmount;
+  let discountAmount     = data.discounted ? subtotal * (data.discountPercent / 100) : 0;
+  let discountedSubtotal = subtotal - discountAmount;
+  let taxAmount          = data.taxed ? discountedSubtotal * (data.taxPercent / 100) : 0;
+  let total              = discountedSubtotal + taxAmount;
+
+  if (isFree) {
+    // Server-side guard: a Free quotation is always zero, no matter
+    // what the client payload contains (tampered or stale UI state).
+    subtotal = 0; discountAmount = 0; taxAmount = 0; total = 0;
+  } else if (data.pricingMode !== 'Itemized' && (Number(subtotal) || 0) <= 0) {
+    // Restores the pre-"allow 0" rule for non-free quotations: a
+    // Lump Sum amount of 0 is only valid when Free. (Itemized mode
+    // was never checked here even before that edit.)
+    return { success: false, error: 'Please enter a Subtotal amount.' };
+  }
 
   // ── Generate PDF → save directly into Ruya_Quotations/Pipeline ──
   const html = generateQuotationHTML({
     quotationId, accountName, ...data,
-    subtotal, taxAmount, discountAmount, total, version
+    subtotal, taxAmount, discountAmount, total, version, isFree, showDelivery
   });
   const blob = Utilities.newBlob(html, 'text/html', 'quotation.html')
     .getAs('application/pdf')
@@ -340,7 +368,9 @@ function createQuotation(data) {
     data.taxed, data.taxPercent, taxAmount,
     total, 'Drafted', data.notes, pdfUrl,
     user, now, user, now,
-    includeBankDetails, includeInstapayDetails
+    includeBankDetails, includeInstapayDetails,
+    isFree,
+    showDelivery
   ]);
 
   // ── Write items ───────────────────────────────────────────
@@ -348,8 +378,8 @@ function createQuotation(data) {
     iSheet.appendRow([
       Utilities.getUuid(), quotationId, index + 1,
       item.displayValue || '', item.name, item.quantity, item.description, item.notes,
-      data.pricingMode === 'Itemized' ? item.unitPrice : '',
-      data.pricingMode === 'Itemized' ? item.subtotal  : '',
+      data.pricingMode === 'Itemized' ? (isFree ? 0 : item.unitPrice) : '',
+      data.pricingMode === 'Itemized' ? (isFree ? 0 : item.subtotal)  : '',
       'Active', user, now
     ]);
   });
@@ -416,6 +446,15 @@ function editQuotation(data) {
   const includeBankDetails     = !!data.includeBankDetails;
   const includeInstapayDetails = !!data.includeInstapayDetails;
 
+  // ── Free flag — only changeable while still a draft; once
+  //    Confirmed/Fulfilled it's locked to whatever it already was,
+  //    regardless of what the client sends (tampered or stale UI).
+  const isFree = (status === 'Drafted') ? !!data.isFree : !!oldRow[Q.IS_FREE];
+
+  // ── Show delivery on PDF — changeable at any stage; default
+  //    true if the flag is missing from the payload ──
+  const showDelivery = data.showDelivery !== false;
+
   // ── Get account name ──────────────────────────────────────
   const accounts = accountsSheet.getDataRange().getValues();
   let accountName = '';
@@ -430,17 +469,26 @@ function editQuotation(data) {
   if (data.pricingMode === 'Itemized') {
     subtotal = data.items.reduce((sum, item) => sum + (item.subtotal || 0), 0);
   }
-  const discountAmount     = data.discounted ? subtotal * (data.discountPercent / 100) : 0;
-  const discountedSubtotal = subtotal - discountAmount;
-  const taxAmount          = data.taxed ? discountedSubtotal * (data.taxPercent / 100) : 0;
-  const total              = discountedSubtotal + taxAmount;
+  let discountAmount     = data.discounted ? subtotal * (data.discountPercent / 100) : 0;
+  let discountedSubtotal = subtotal - discountAmount;
+  let taxAmount          = data.taxed ? discountedSubtotal * (data.taxPercent / 100) : 0;
+  let total              = discountedSubtotal + taxAmount;
+
+  if (isFree) {
+    // Server-side guard: a Free quotation is always zero, no matter
+    // what the client payload contains (tampered or stale UI state).
+    subtotal = 0; discountAmount = 0; taxAmount = 0; total = 0;
+  } else if (data.pricingMode !== 'Itemized' && (Number(subtotal) || 0) <= 0) {
+    // Restores the pre-"allow 0" rule for non-free quotations.
+    return { success: false, error: 'Please enter a Subtotal amount.' };
+  }
 
   // ── Generate new PDF → save into current stage folder ─────
   const stageFolder = getQuotationStageFolder(status);
   const html = generateQuotationHTML({
     quotationId: data.id, accountName, ...data,
     subtotal, taxAmount, discountAmount, total,
-    version: newVersion
+    version: newVersion, isFree, showDelivery
   });
   const blob = Utilities.newBlob(html, 'text/html', 'quotation.html')
     .getAs('application/pdf')
@@ -473,12 +521,12 @@ function editQuotation(data) {
     }));
 
   // ── Log field-level changes ───────────────────────────────
-  logQuotationFieldChanges(oldRow, { ...data, subtotal, total, discountAmount, taxAmount, includeBankDetails, includeInstapayDetails },
+  logQuotationFieldChanges(oldRow, { ...data, subtotal, total, discountAmount, taxAmount, includeBankDetails, includeInstapayDetails, isFree, showDelivery },
     data.accountId, accountName);
 
   // ── Update quotation row — FOLDER_URL now points to the new PDF ──
-  // 29 columns now (added IncludeInstapayDetails at the end).
-  qSheet.getRange(qRowIndex, 1, 1, 29).setValues([[
+  // 31 columns now (added ShowDelivery at the end, after IsFree).
+  qSheet.getRange(qRowIndex, 1, 1, 31).setValues([[
     data.id, newVersion, data.accountId, accountName,
     data.projectName, data.projectDescription,
     data.dateIssued, data.minDays, data.maxDays, data.deliveryDeadline,
@@ -487,7 +535,9 @@ function editQuotation(data) {
     data.taxed, data.taxPercent, taxAmount,
     total, status, data.notes, newPdfUrl,
     oldRow[Q.CREATED_BY], oldRow[Q.CREATED_AT], user, now,
-    includeBankDetails, includeInstapayDetails
+    includeBankDetails, includeInstapayDetails,
+    isFree,
+    showDelivery
   ]]);
 
   // ── Update items ──────────────────────────────────────────
@@ -501,8 +551,8 @@ function editQuotation(data) {
   data.items.forEach((item, index) => {
     const itemIndex    = index + 1;
     const existing     = existingItemRows.find(r => r.data[QI.ITEM_INDEX] === itemIndex);
-    const unitPrice    = data.pricingMode === 'Itemized' ? item.unitPrice : '';
-    const itemSubtotal = data.pricingMode === 'Itemized' ? item.subtotal  : '';
+    const unitPrice    = data.pricingMode === 'Itemized' ? (isFree ? 0 : item.unitPrice) : '';
+    const itemSubtotal = data.pricingMode === 'Itemized' ? (isFree ? 0 : item.subtotal)  : '';
     if (existing) {
       iSheet.getRange(existing.sheetRow, 1, 1, 13).setValues([[
         existing.data[QI.ITEM_ID], data.id, itemIndex,
@@ -654,6 +704,7 @@ if (qRow[Q.STATUS] === 'Confirmed' || qRow[Q.STATUS] === 'Fulfilled') {
   const deliveryDdl = qRow[Q.DELIVERY_DEADLINE];
   const dateIssued  = qRow[Q.DATE_ISSUED];
   const minDays     = qRow[Q.MIN_DAYS];
+  const isFree      = !!qRow[Q.IS_FREE];
 
   // ── Calculate DueDate ─────────────────────────────────────
   let dueDate = null;
@@ -717,15 +768,18 @@ if (qRow[Q.STATUS] === 'Confirmed' || qRow[Q.STATUS] === 'Fulfilled') {
   qSheet.getRange(qRowIndex, Q.LAST_UPDATED_AT + 1).setValue(now);
 
   // ── Create Projects row ───────────────────────────────────
+  // Free quotations start their project life in "Needs Review" —
+  // there's nothing to pay/distribute, just a delivery to confirm.
   const projectId = Utilities.getUuid();
   pSheet.appendRow([
     projectId, quotationId, accountId, accountName,
     projectName, projectDesc, deliveryDdl, dueDate,
-    'Active', '', now, '',              // cols 0-11
+    isFree ? 'Needs Review' : 'Active', '', now, '', // cols 0-11
     qRow[Q.TOTAL],                      // col 12 Total Amount
     qRow[Q.CURRENCY],                   // col 13 Currency
     0,                                  // col 14 unused
-    0                                   // col 15 unused
+    0,                                  // col 15 unused
+    ''                                  // col 16 DeliveredDate — blank until confirmed
   ]);
 
   // ── Create Project_Items rows ─────────────────────────────
@@ -913,7 +967,7 @@ function generateQuotationHTML(data) {
     <tr>
       <td colspan="${showPricing ? 5 : 3}" style="border:none;"></td>
       <td style="padding:10px;font-weight:700;font-size:14px;color:#1a1a2e;border-top:2px solid #e2e4ef;">Total</td>
-      <td style="padding:10px;text-align:right;font-weight:700;font-size:14px;color:#1a1a2e;border-top:2px solid #e2e4ef;">${cur} ${fmtAccounting(data.total)}</td>
+      <td style="padding:10px;text-align:right;font-weight:700;font-size:14px;color:#1a1a2e;border-top:2px solid #e2e4ef;">${data.isFree ? 'Free' : cur + ' ' + fmtAccounting(data.total)}</td>
     </tr>`;
 
   const deliveryText = (data.minDays && data.maxDays)
@@ -1137,8 +1191,8 @@ const footerNoteHtml = branding.footerNote
     <div class="doc-meta">
       <strong style="color:#1a1a2e;">${esc(data.quotationId)}</strong>
       &nbsp;·&nbsp; Version ${esc(String(data.version))}<br>
-      Date Issued: ${esc(data.dateIssued || '—')}<br>
-      Delivery: ${esc(deliveryText)}
+      Date Issued: ${esc(data.dateIssued || '—')}${data.showDelivery !== false ? `<br>
+      Delivery: ${esc(deliveryText)}` : ''}
     </div>
   </div>
 </div>
