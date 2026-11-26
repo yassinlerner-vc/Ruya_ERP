@@ -193,6 +193,15 @@ function deleteTeam(teamId) {
   }
   if (rowIndex === -1) return { success: false, error: 'Team member not found.' };
 
+  // Don't let someone with unpaid (deferred) revenue shares disappear.
+  if (!oldRow[TM.IS_PARTNER]) {
+    const bal = computeTeamBalances_()[String(teamId)];
+    if (bal && bal.outstanding > 0.004) {
+      return { success: false, error: 'Cannot remove ' + oldRow[TM.NAME] + ' — they are still owed EGP ' +
+        bal.outstanding.toFixed(2) + '. Pay or undo the outstanding balance first.' };
+    }
+  }
+
   const folderUrl = extractUrl(oldRow[TM.FOLDER_URL]);
   if (folderUrl) {
     try {
