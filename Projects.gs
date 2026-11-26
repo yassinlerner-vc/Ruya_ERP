@@ -260,17 +260,30 @@ function getProjectDetail(projectId) {
   // ── Distribution ─────────────────────────────────────────
   // Each row carries its MODE ('percent' | 'amount'). Rows saved
   // before the Mode column existed come back as 'percent'.
-  const distribution = distSheet ? distSheet.getDataRange().getValues().slice(1)
-    .filter(row => String(row[DIST.PROJECT_ID]) === String(projectId))
-    .map(row => ({
-      distributionId: String(row[DIST.DISTRIBUTION_ID]),
+  // Each row also carries its payment state: payState is one of
+  // 'paid' | 'deferred' | 'partial' | 'partner' (partners settle via the
+  // Ledger), plus paid / remaining amounts computed from Team_Payouts.
+  const distRaw = distSheet ? distSheet.getDataRange().getValues().slice(1)
+    .filter(row => String(row[DIST.PROJECT_ID]) === String(projectId)) : [];
+  const payInfo = getDistPayInfoForRows_(distRaw);
+  const distribution = distRaw.map(row => {
+    const id = String(row[DIST.DISTRIBUTION_ID]);
+    const pi = payInfo[id];
+    return {
+      distributionId: id,
       personId:       String(row[DIST.PERSON_ID]   || ''),
       personName:     String(row[DIST.PERSON_NAME] || ''),
       mode:           normDistMode(row[DIST.MODE]),
       percent:        Number(row[DIST.PERCENT] || 0),
       amount:         Number(row[DIST.AMOUNT]  || 0),
-      notes:          String(row[DIST.NOTES]   || '')
-    })) : [];
+      notes:          String(row[DIST.NOTES]   || ''),
+      isPartner:      pi.isPartner,
+      payState:       pi.payState,
+      paid:           pi.paid,
+      remaining:      pi.remaining
+    };
+  });
+  const payoutsLocked = hasPayoutsForProject_(projectId);
 
   // ── Team members (for distribution dropdown) ───────────────
   const teamMembers = tSheet ? tSheet.getDataRange().getValues().slice(1)
@@ -278,10 +291,11 @@ function getProjectDetail(projectId) {
     .map(row => ({
       id:   String(row[TM.TEAM_ID]),
       name: String(row[TM.NAME]),
-      role: String(row[TM.ROLE])
+      role: String(row[TM.ROLE]),
+      isPartner: !!row[TM.IS_PARTNER]
     })) : [];
 
-  return { project, items, payments, distribution, teamMembers, amountPaid, remainingToPay, isFullyPaid, totalEgpCollected };
+  return { project, items, payments, distribution, teamMembers, amountPaid, remainingToPay, isFullyPaid, totalEgpCollected, payoutsLocked };
 }
 
 // ============================================================
@@ -436,6 +450,16 @@ function deletePayment(paymentId) {
 //  for fulfillProjectAndQuotation().
 // ============================================================
 function saveDistribution(projectId, rows) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    return saveDistributionLocked_(projectId, rows);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function saveDistributionLocked_(projectId, rows) {
   const pSheet    = getSheet('Projects');
   const paySheet  = getSheet('Payments');
   const distSheet = getSheet('Revenue_Distribution');
@@ -479,6 +503,15 @@ function saveDistribution(projectId, rows) {
     return { success: false, error: 'Add at least one person to distribute to.' };
   }
 
+  // Once any money has been paid out against this project's allocations,
+  // the distribution is locked — re-saving would wipe the payment trail.
+  // Undo the payouts (Team ▸ member ▸ Undo) to unlock it.
+  if (hasPayoutsForProject_(projectId)) {
+    return { success: false, error: 'Payments have already been made against this distribution, so it is locked. ' +
+      'Undo those payments from the team member\'s profile (Team module) to edit it.' };
+  }
+  const partnerIds = getPartnerIdSet_();
+
   // ── Work in whole piastres (cents) so nothing drifts ───────
   const poolCents = Math.round(totalEgpCollected * 100);
   const computed  = [];
@@ -503,7 +536,27 @@ function saveDistribution(projectId, rows) {
       percentInput = pct;
       cents = Math.round(poolCents * pct / 100);
     }
-    computed.push({ r: r, mode: mode, cents: cents, percentInput: percentInput });
+
+    // Paid now / pay later — an explicit choice for every non-partner row.
+    // Partners are settled through the Ledger, so they are always PAID
+    // with no payout record.
+    const isPartner = !!partnerIds[String(r.personId || '')];
+    let payStatus = DIST_STATUS_PAID, payMethod = '';
+    if (!isPartner) {
+      const st = String(r.status || '').toUpperCase();
+      if (st !== DIST_STATUS_PAID && st !== DIST_STATUS_DEFERRED) {
+        return { success: false, error: 'Choose Paid now or Pay later for ' + who + '.' };
+      }
+      payStatus = st;
+      if (st === DIST_STATUS_PAID) {
+        payMethod = String(r.method || 'Cash');
+        if (PAYMENT_METHODS.indexOf(payMethod) === -1) {
+          return { success: false, error: 'Choose a valid payment method for ' + who + '.' };
+        }
+      }
+    }
+    computed.push({ r: r, mode: mode, cents: cents, percentInput: percentInput,
+                    isPartner: isPartner, payStatus: payStatus, payMethod: payMethod });
   }
 
   const sumCents = computed.reduce((s, c) => s + c.cents, 0);
@@ -543,6 +596,10 @@ function saveDistribution(projectId, rows) {
   const user = Session.getActiveUser().getEmail();
   const now  = new Date();
   const logRows = [];
+  const todayStr  = Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  const nextPayoutId = makePayoutIdGen_();
+  let paySheetOut = null;
+  if (computed.some(c => !c.isPartner && c.payStatus === DIST_STATUS_PAID)) paySheetOut = getPayoutsSheet_();
 
   computed.forEach(c => {
     const amount  = c.cents / 100;
@@ -551,13 +608,25 @@ function saveDistribution(projectId, rows) {
       : Math.round(c.cents / poolCents * 100 * 10000) / 10000;   // derived, 4 dp
 
     // Columns 0–12 are the original layout; Mode is column 13 (DIST_MODE_COL).
+    const distId = Utilities.getUuid();
     distSheet.appendRow([
-      Utilities.getUuid(), projectId, quotationId, accountName, projectName,
+      distId, projectId, quotationId, accountName, projectName,
       c.r.personId || '', c.r.personName || '', percent, amount,
       'EGP', c.r.notes || '', user, now,
-      c.mode
+      c.mode, c.payStatus
     ]);
-    logRows.push({ name: c.r.personName, mode: c.mode, percent: percent, amount: amount });
+
+    // "Paid now" → record the payout straight away (today, chosen method)
+    // so Total Paid and Date Paid stay consistent on the member's profile.
+    if (!c.isPartner && c.payStatus === DIST_STATUS_PAID) {
+      paySheetOut.appendRow([
+        nextPayoutId(), distId, projectId, projectName,
+        c.r.personId || '', c.r.personName || '', amount, todayStr, c.payMethod,
+        'Paid at distribution', user, now
+      ]);
+    }
+    logRows.push({ name: c.r.personName, mode: c.mode, percent: percent, amount: amount,
+                   payment: c.isPartner ? 'ledger' : c.payStatus });
   });
 
   writeLog('Revenue_Distribution_Log', 'Revenue_Distribution', projectId,
