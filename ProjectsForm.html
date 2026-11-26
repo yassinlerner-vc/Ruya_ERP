@@ -135,6 +135,13 @@
 
     .locked-note { font-size: 12px; color: #888; padding: 10px 0; }
 
+    .badge-owed { background: #fff3cd; color: #856404; }
+    .badge-ledger { background: #f0f2fa; color: #555; border: 1px solid #d0d3e0; padding: 2px 9px; }
+    .pay-choice { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+    .pay-choice select, .inline-row select.pay-sel { min-width: 0; width: auto; padding: 4px 8px; font-size: 12px; }
+    .dist-lock-note { background: #fff8e6; border: 1px solid #f0dfa8; color: #7a5b00; border-radius: 6px; padding: 9px 12px; font-size: 12px; line-height: 1.5; margin-bottom: 10px; }
+    .dist-owed-note { font-size: 12px; color: #856404; margin: 0 0 12px; }
+
     .form-actions { display: flex; gap: 8px; align-items: center; padding: 12px 24px; background: #fff; border-top: 1px solid #e2e4ef; position: fixed; bottom: 0; left: 0; right: 0; z-index: 9; }
     .spacer { flex: 1; }
     .hidden { display: none !important; }
@@ -301,6 +308,9 @@ let draftDistribution = [];   // rows: { personId, personName, mode: 'percent'|'
 let distEditing = false;
 let distMode = 'percent';     // which mode the "Add" row is currently set to
 let distSelectedPerson = '';  // keeps the person dropdown stable across re-renders
+let distPayChoice = '';       // 'PAID' | 'DEFERRED' | '' — payment choice applied to the next row added
+let distPayMethod = 'Cash';   // method used when the next row is added as "Paid now"
+let PAY_METHODS = ['Cash', 'Bank Transfer', 'Instapay', 'Vodafone Cash', 'Other'];  // refreshed from the server on load
 
 // Rounding slack (in piastres) when deciding whether a distribution "adds up".
 // Mirrors the server's tolerance, which absorbs it into the largest percent row.
@@ -454,6 +464,7 @@ function openProject(projectId) {
       distEditing = false;
       distMode = 'percent';
       distSelectedPerson = '';
+      distPayChoice = '';
       renderProjectDetail(detail);
       switchView('project');
       document.getElementById('topbarTitle').textContent = detail.project.quotationId + ' — ' + detail.project.projectName;
@@ -751,29 +762,36 @@ function renderDistribution(detail) {
     // Saved rows: amount is the stored EGP figure; percent is stored too.
     const saved = detail.distribution.map(d => ({
       personName: d.personName, mode: d.mode,
-      percent: d.percent, amount: d.amount
+      percent: d.percent, amount: d.amount,
+      payState: d.payState, remaining: d.remaining
     }));
+    const totalOwed = saved.reduce((s, r) => s + (Number(r.remaining) || 0), 0);
     const totalAmt = saved.reduce((s, r) => s + (Number(r.amount) || 0), 0);
     const totalPct = poolCents > 0 ? Math.round(totalAmt * 100) / poolCents * 100 : 0;
     area.innerHTML = `
       ${isForeign ? `<p class="locked-note" style="padding-top:0;margin-bottom:10px;">Distributed from EGP ${fmt(detail.totalEgpCollected)} actually collected (project total ${esc(p.currency)} ${fmt(p.totalAmount)}).</p>` : ''}
       <table class="dist-table">
-        <thead><tr><th>Person</th><th class="col-basis">Basis</th><th class="col-amt">Amount (EGP)</th><th class="col-pct">%</th></tr></thead>
+        <thead><tr><th>Person</th><th class="col-basis">Basis</th><th class="col-amt">Amount (EGP)</th><th class="col-pct">%</th><th>Payment</th></tr></thead>
         <tbody>
           ${saved.map(d => `<tr>
             <td><strong>${esc(d.personName)}</strong></td>
             <td class="col-basis">${basisBadge(d.mode)}</td>
             <td class="col-amt">EGP ${fmt(d.amount)}</td>
             <td class="col-pct">${d.mode === 'amount' ? '≈ ' : ''}${fmtPct(d.percent)}</td>
+            <td>${payBadge(d)}</td>
           </tr>`).join('')}
         </tbody>
         <tfoot><tr>
           <td colspan="2">Total</td>
           <td class="col-amt">EGP ${fmt(totalAmt)}</td>
           <td class="col-pct">${fmtPct(totalPct)}</td>
+          <td></td>
         </tr></tfoot>
       </table>
-      <button class="btn" onclick="enterDistEdit()">Edit Distribution</button>`;
+      ${totalOwed > 0.004 ? `<p class="dist-owed-note">EGP ${fmt(totalOwed)} is allocated but not yet paid out to the team — pay it from the member's profile in the Team module.</p>` : ''}
+      ${detail.payoutsLocked
+        ? `<div class="dist-lock-note">🔒 Payments have already been made against this distribution, so it is locked. To change it, undo those payments from the team member's profile (Team module).</div>`
+        : `<button class="btn" onclick="enterDistEdit()">Edit Distribution</button>`}`;
     return;
   }
 
@@ -791,7 +809,10 @@ function enterDistEdit() {
     personName: d.personName,
     mode:       d.mode === 'amount' ? 'amount' : 'percent',
     percent:    d.mode === 'amount' ? 0 : d.percent,
-    amount:     d.mode === 'amount' ? d.amount : 0
+    amount:     d.mode === 'amount' ? d.amount : 0,
+    isPartner:  !!d.isPartner,
+    status:     d.isPartner ? null : (d.payState === 'paid' ? 'PAID' : 'DEFERRED'),
+    method:     'Cash'
   }));
   distEditing = true;
   renderDistEditor(currentDetail);
@@ -826,6 +847,16 @@ function renderDistEditor(detail) {
       <td class="col-basis">${basisBadge(r.mode)}</td>
       <td class="col-amt">EGP ${fmt(rowCents(r, t.poolCents) / 100)}</td>
       <td class="col-pct">${pctCell(r, t.poolCents)}</td>
+      <td>${r.isPartner
+        ? '<span class="badge badge-ledger">Via Ledger</span>'
+        : `<div class="pay-choice">
+            <select class="pay-sel" onchange="setRowPay(${idx}, this.value)">
+              ${r.status ? '' : '<option value="" selected disabled>Choose…</option>'}
+              <option value="PAID"${r.status === 'PAID' ? ' selected' : ''}>Paid now</option>
+              <option value="DEFERRED"${r.status === 'DEFERRED' ? ' selected' : ''}>Pay later</option>
+            </select>
+            <select class="pay-sel" id="rowMethod_${idx}" style="${r.status === 'PAID' ? '' : 'display:none;'}" onchange="setRowMethod(${idx}, this.value)">${methodOptionsHtml(r.method)}</select>
+          </div>`}</td>
       <td class="col-acts"><button class="btn-sm btn-sm-danger" onclick="removeDistRow(${idx})">Remove</button></td>
     </tr>`).join('');
 
@@ -843,29 +874,81 @@ function renderDistEditor(detail) {
   area.innerHTML = `
     ${isForeign ? `<p class="locked-note" style="padding-top:0;margin-bottom:10px;">Distributing EGP ${fmt(egpPool)} actually collected (project total ${esc(p.currency)} ${fmt(p.totalAmount)}) — not a fresh conversion of the quotation total.</p>` : ''}
     <table class="dist-table">
-      <thead><tr><th>Person</th><th class="col-basis">Basis</th><th class="col-amt">Amount (EGP)</th><th class="col-pct">%</th><th class="col-acts"></th></tr></thead>
-      <tbody>${rowsHtml || '<tr><td colspan="5" style="text-align:center;color:#888;">No one added yet.</td></tr>'}</tbody>
+      <thead><tr><th>Person</th><th class="col-basis">Basis</th><th class="col-amt">Amount (EGP)</th><th class="col-pct">%</th><th>Payment</th><th class="col-acts"></th></tr></thead>
+      <tbody>${rowsHtml || '<tr><td colspan="6" style="text-align:center;color:#888;">No one added yet.</td></tr>'}</tbody>
     </table>
     <div class="dist-progress ${matchClass}">
       Allocated: <strong>EGP ${fmt(t.allocated / 100)}</strong> (${fmtPct(allocPct)}) of EGP ${fmt(egpPool)}${statusText}
     </div>
     <div class="inline-row">
-      <select id="distPersonSelect" onchange="distSelectedPerson = this.value">${members.map(m => `<option value="${esc(m.id)}" data-name="${esc(m.name)}"${m.id === selId ? ' selected' : ''}>${esc(m.name)}${m.role ? ' (' + esc(m.role) + ')' : ''}</option>`).join('')}</select>
+      <select id="distPersonSelect" onchange="onDistPersonChange(this.value)">${members.map(m => `<option value="${esc(m.id)}" data-name="${esc(m.name)}"${m.id === selId ? ' selected' : ''}>${esc(m.name)}${m.role ? ' (' + esc(m.role) + ')' : ''}</option>`).join('')}</select>
       <div class="mode-toggle">
         <button type="button" id="distModePct" class="${distMode === 'percent' ? 'active' : ''}" onclick="setDistMode('percent')">%</button>
         <button type="button" id="distModeAmt" class="${distMode === 'amount' ? 'active' : ''}" onclick="setDistMode('amount')">EGP</button>
       </div>
       <input type="text" id="distValueInput" placeholder="${distMode === 'amount' ? 'EGP amount' : '%'}" inputmode="decimal" autocomplete="off" onkeydown="if(event.key==='Enter'){event.preventDefault();addDistRow();}">
+      <span class="pay-choice" id="distPayWrap">
+        <select class="pay-sel" id="distPayStatusSel" onchange="setDistPayChoice(this.value)">
+          <option value=""${distPayChoice === '' ? ' selected' : ''} disabled>Payment…</option>
+          <option value="PAID"${distPayChoice === 'PAID' ? ' selected' : ''}>Paid now</option>
+          <option value="DEFERRED"${distPayChoice === 'DEFERRED' ? ' selected' : ''}>Pay later</option>
+        </select>
+        <select class="pay-sel" id="distPayMethodSel" style="display:none;" onchange="distPayMethod = this.value">${methodOptionsHtml(distPayMethod)}</select>
+      </span>
       <button class="btn-sm btn-sm-primary" onclick="addDistRow()">+ Add</button>
       <button class="btn-sm" onclick="distributeRest()">Distribute Rest to Selected</button>
     </div>
-    <p class="locked-note" style="padding-bottom:0;">Mix freely: percentages are of the EGP ${fmt(egpPool)} collected, fixed amounts are in EGP. The total must add up to the full amount.</p>
+    <p class="locked-note" style="padding-bottom:0;">Mix freely: percentages are of the EGP ${fmt(egpPool)} collected, fixed amounts are in EGP. The total must add up to the full amount. For each team member choose <strong>Paid now</strong> (recorded as paid today) or <strong>Pay later</strong> (allocated, shown as their balance in the Team module). Partners are settled through the Ledger.</p>
     <div class="dialog-btns" style="margin-top:16px;">
       <button class="btn" onclick="cancelDistEdit()">Cancel</button>
       <button class="btn btn-success" id="btnSaveDist" onclick="submitDistribution()">
         <div class="spinner"></div><span class="btn-label">Save Distribution</span>
       </button>
     </div>`;
+  syncAddPayControls();
+}
+
+/* ── Payment choice helpers (Paid now / Pay later) ───────── */
+function memberOf(id) {
+  return ((currentDetail && currentDetail.teamMembers) || []).find(m => m.id === id) || null;
+}
+function methodOptionsHtml(selected) {
+  return PAY_METHODS.map(m => `<option value="${esc(m)}"${m === selected ? ' selected' : ''}>${esc(m)}</option>`).join('');
+}
+function payBadge(d) {
+  if (d.payState === 'partner')  return '<span class="badge badge-ledger">Via Ledger</span>';
+  if (d.payState === 'paid')     return '<span class="badge badge-fully-paid">Paid</span>';
+  if (d.payState === 'partial')  return '<span class="badge badge-owed">Partly paid · EGP ' + fmt(d.remaining) + ' owed</span>';
+  return '<span class="badge badge-owed">Pay later · EGP ' + fmt(d.remaining) + ' owed</span>';
+}
+function setRowPay(idx, v) {
+  const r = draftDistribution[idx];
+  if (!r) return;
+  r.status = v;
+  const m = document.getElementById('rowMethod_' + idx);
+  if (m) m.style.display = v === 'PAID' ? '' : 'none';
+}
+function setRowMethod(idx, v) { if (draftDistribution[idx]) draftDistribution[idx].method = v; }
+function onDistPersonChange(id) { distSelectedPerson = id; syncAddPayControls(); }
+function setDistPayChoice(v) { distPayChoice = v; syncAddPayControls(); }
+function syncAddPayControls() {
+  const sel = document.getElementById('distPersonSelect');
+  const wrap = document.getElementById('distPayWrap');
+  const meth = document.getElementById('distPayMethodSel');
+  if (!sel || !wrap) return;
+  const m = memberOf(sel.value);
+  wrap.style.display = (m && m.isPartner) ? 'none' : '';
+  if (meth) meth.style.display = distPayChoice === 'PAID' ? '' : 'none';
+}
+// Reads the "Payment…" controls for the person about to be added.
+function readAddPay(personId, personName) {
+  const m = memberOf(personId);
+  if (m && m.isPartner) return { ok: true, isPartner: true, status: null, method: '' };
+  if (!distPayChoice) {
+    showToast('Choose Paid now or Pay later for ' + personName + '.', 'error');
+    return { ok: false };
+  }
+  return { ok: true, isPartner: false, status: distPayChoice, method: distPayMethod };
 }
 
 function setDistMode(mode) {
@@ -880,7 +963,7 @@ function setDistMode(mode) {
 // Adds value to a person's row. One row per person: adding more to
 // someone already in the list tops up that row if the basis matches;
 // a different basis is refused rather than silently converting.
-function upsertDistRow(personId, personName, mode, value) {
+function upsertDistRow(personId, personName, mode, value, pay) {
   const existing = draftDistribution.find(r => r.personId === personId);
   if (existing) {
     if (existing.mode !== mode) {
@@ -894,7 +977,10 @@ function upsertDistRow(personId, personName, mode, value) {
   draftDistribution.push({
     personId, personName, mode,
     percent: mode === 'percent' ? value : 0,
-    amount:  mode === 'amount'  ? value : 0
+    amount:  mode === 'amount'  ? value : 0,
+    isPartner: !!(pay && pay.isPartner),
+    status:    pay ? pay.status : null,
+    method:    pay && pay.method ? pay.method : 'Cash'
   });
   return true;
 }
@@ -912,7 +998,9 @@ function addDistRow() {
   const personId = sel.value;
   const personName = sel.options[sel.selectedIndex].dataset.name;
   distSelectedPerson = personId;
-  if (!upsertDistRow(personId, personName, distMode, value)) return;
+  const pay = readAddPay(personId, personName);
+  if (!pay.ok) return;
+  if (!upsertDistRow(personId, personName, distMode, value, pay)) return;
   renderDistEditor(currentDetail);
 }
 
@@ -929,7 +1017,9 @@ function distributeRest() {
   const value = distMode === 'amount'
     ? t.remaining / 100
     : Math.round(t.remaining / t.poolCents * 100 * 10000) / 10000;
-  if (!upsertDistRow(personId, personName, distMode, value)) return;
+  const pay = readAddPay(personId, personName);
+  if (!pay.ok) return;
+  if (!upsertDistRow(personId, personName, distMode, value, pay)) return;
   renderDistEditor(currentDetail);
 }
 function removeDistRow(idx) {
@@ -952,9 +1042,18 @@ function submitDistribution() {
   }
   // Send only the field that was the input for each row; the server
   // recomputes the EGP figures from the pool and reconciles rounding.
-  const payload = draftDistribution.map(r => r.mode === 'amount'
-    ? { personId: r.personId, personName: r.personName, mode: 'amount',  amount: r.amount }
-    : { personId: r.personId, personName: r.personName, mode: 'percent', percent: r.percent });
+  const unchosen = draftDistribution.find(r => !r.isPartner && !r.status);
+  if (unchosen) { showToast('Choose Paid now or Pay later for ' + unchosen.personName + '.', 'error'); return; }
+  const payload = draftDistribution.map(r => {
+    const base = r.mode === 'amount'
+      ? { personId: r.personId, personName: r.personName, mode: 'amount',  amount: r.amount }
+      : { personId: r.personId, personName: r.personName, mode: 'percent', percent: r.percent };
+    if (!r.isPartner) {                       // partners are settled via the Ledger
+      base.status = r.status;
+      if (r.status === 'PAID') base.method = r.method || 'Cash';
+    }
+    return base;
+  });
 
   const btn = document.getElementById('btnSaveDist');
   startProcessing(btn, 'Saving distribution...');
@@ -983,6 +1082,7 @@ function fmt(n) { return Number(n||0).toLocaleString('en-US', { minimumFractionD
 function safe(v) { return Number(String(v).replace(/,/g, '')) || 0; }
 function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
+google.script.run.withSuccessHandler(m => { if (m && m.length) PAY_METHODS = m; }).getPaymentMethods();
 init();
 </script>
 </body>
