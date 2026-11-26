@@ -55,7 +55,47 @@ const DIST = {
   NOTES:           10,
   CREATED_BY:      11,
   CREATED_AT:      12,
-  MODE:            13
+  MODE:            13,
+  STATUS:          14
+};
+
+// ============================================================
+//  REVENUE DISTRIBUTION — PAYMENT STATUS (DIST.STATUS, col O)
+//  'PAID'     = the allocation has been paid out (or never needed
+//               paying out: partners are settled through the Ledger)
+//  'DEFERRED' = allocated but not yet (fully) paid to the member
+//  Blank (rows written before this column existed) is read as PAID.
+//  The amount actually paid is always computed live from the
+//  Team_Payouts sheet — Status is the stored, human-readable flag.
+// ============================================================
+const DIST_STATUS_PAID     = 'PAID';
+const DIST_STATUS_DEFERRED = 'DEFERRED';
+
+// ============================================================
+//  COLUMN INDEXES — Team_Payouts (0-based)
+//
+//  Sheet headers (row 1):
+//  Payout ID | Distribution ID | Project ID | Project Name |
+//  Person ID | Person Name | Amount (EGP) | Date | Method |
+//  Notes | Created By | Created At
+//
+//  One row = one payment made to a team member against one
+//  Revenue_Distribution row. Partial payments = several rows.
+//  All amounts are EGP (distribution amounts always are).
+// ============================================================
+const TPAY = {
+  PAYOUT_ID:       0,
+  DISTRIBUTION_ID: 1,
+  PROJECT_ID:      2,
+  PROJECT_NAME:    3,
+  PERSON_ID:       4,
+  PERSON_NAME:     5,
+  AMOUNT:          6,
+  DATE:            7,
+  METHOD:          8,
+  NOTES:           9,
+  CREATED_BY:      10,
+  CREATED_AT:      11
 };
 
 // ============================================================
